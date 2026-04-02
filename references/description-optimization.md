@@ -4,7 +4,7 @@ The description field in SKILL.md frontmatter is the primary mechanism that dete
 
 ### Step 1: Generate trigger eval queries
 
-Create 20 eval queries — a mix of should-trigger and should-not-trigger. Save as JSON:
+Create 12 eval queries — 6 should-trigger and 6 should-not-trigger. Save as JSON:
 
 ```json
 [
@@ -19,9 +19,9 @@ Bad: `"Format this data"`, `"Extract text from PDF"`, `"Create a chart"`
 
 Good: `"ok so my boss just sent me this xlsx file (its in my downloads, called something like 'Q4 sales final FINAL v2.xlsx') and she wants me to add a column that shows the profit margin as a percentage. The revenue is in column C and costs are in column D i think"`
 
-For the **should-trigger** queries (8-10), think about coverage. You want different phrasings of the same intent — some formal, some casual. Include cases where the user doesn't explicitly name the skill or file type but clearly needs it. Throw in some uncommon use cases and cases where this skill competes with another but should win.
+For the **should-trigger** queries (6), think about coverage. You want different phrasings of the same intent — some formal, some casual. Include cases where the user doesn't explicitly name the skill or file type but clearly needs it. Throw in some uncommon use cases and cases where this skill competes with another but should win.
 
-For the **should-not-trigger** queries (8-10), the most valuable ones are the near-misses — queries that share keywords or concepts with the skill but actually need something different. Think adjacent domains, ambiguous phrasing where a naive keyword match would trigger but shouldn't, and cases where the query touches on something the skill does but in a context where another tool is more appropriate.
+For the **should-not-trigger** queries (6), the most valuable ones are the near-misses — queries that share keywords or concepts with the skill but actually need something different. Think adjacent domains, ambiguous phrasing where a naive keyword match would trigger but shouldn't, and cases where the query touches on something the skill does but in a context where another tool is more appropriate.
 
 The key thing to avoid: don't make should-not-trigger queries obviously irrelevant. "Write a fibonacci function" as a negative test for a PDF skill is too easy — it doesn't test anything. The negative cases should be genuinely tricky.
 
@@ -31,12 +31,12 @@ Present the eval set to the user conversationally for review:
 
 1. Show the eval queries in a clear format, grouped by category:
 
-   **Should trigger (8-10 queries):**
+   **Should trigger (6 queries):**
    1. `"ok so my boss just sent me this xlsx file..."` ✅
    2. `"another query..."` ✅
    ...
 
-   **Should NOT trigger (8-10 queries):**
+   **Should NOT trigger (6 queries):**
    1. `"some near-miss query..."` ❌
    2. `"another query..."` ❌
    ...
@@ -57,21 +57,35 @@ This step matters — bad eval queries lead to bad descriptions.
 
 Tell the user: "This will take some time — I'll run the optimization loop in the background and check on it periodically."
 
-Save the eval set to the workspace, then run in the background:
+Save the eval set to the workspace, then run in the background. **Critical: redirect all output to files to avoid blowing up the conversation context.**
 
 ```bash
-python -m scripts.run_loop \
+cd ~/.openclaw/workspace/skills/skill-creator && python3 -m scripts.run_loop \
   --eval-set <path-to-trigger-eval.json> \
   --skill-path <path-to-skill> \
   --max-iterations 5 \
-  --verbose
+  --verbose \
+  --results-dir <workspace>/description-optimization \
+  2> <workspace>/description-optimization/loop.log
 ```
 
 The `--model` parameter is optional — openclaw uses its configured model automatically.
 
-While it runs, periodically tail the output to give the user updates on which iteration it's on and what the scores look like.
+**While it runs:** to check progress, tail only the last ~10 lines of `loop.log`. Do NOT read the full log.
 
-This handles the full optimization loop automatically. It splits the eval set into 60% train and 40% held-out test, evaluates the current description (running each query 3 times to get a reliable trigger rate), then calls the agent to propose improvements based on what failed. It re-evaluates each new description on both train and test, iterating up to 5 times. When it's done, it prints JSON to stdout with `best_description` — selected by test score rather than train score to avoid overfitting. Read the JSON output and present the results to the user in conversation.
+```bash
+tail -10 <workspace>/description-optimization/loop.log
+```
+
+This handles the full optimization loop automatically. It splits the eval set into 60% train and 40% held-out test, evaluates the current description (running each query 3 times to get a reliable trigger rate), then calls the agent to propose improvements based on what failed. It re-evaluates each new description on both train and test, iterating up to 5 times.
+
+**After completion:** do NOT read the full `results.json` — it contains the complete history of every iteration and query, which will overflow the context. Extract only the summary:
+
+```bash
+python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(json.dumps({k:d[k] for k in ('exit_reason','original_description','best_description','best_score','best_train_score','best_test_score','iterations_run')}, indent=2))" <workspace>/description-optimization/*/results.json
+```
+
+Present `best_description`, scores, and iteration count to the user.
 
 ### Step 4: Apply the result
 

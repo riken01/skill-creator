@@ -1,6 +1,45 @@
 """Shared utilities for skill-creator scripts."""
 
+import shutil
+import subprocess
 from pathlib import Path
+
+
+EVAL_AGENT_NAME = "description-improvement"
+
+
+def get_skills_dir() -> Path:
+    """Return the OpenClaw user skills directory."""
+    return Path.home() / ".openclaw" / "skills"
+
+
+def ensure_eval_agent(timeout: int = 60) -> str:
+    """Create the eval agent if it doesn't exist, return agent name.
+
+    Centralises agent setup so callers don't duplicate creation logic.
+    """
+    agent_dir = Path.home() / ".openclaw" / "agents" / EVAL_AGENT_NAME
+    agent_workspace = Path.home() / ".openclaw" / f"workspace-{EVAL_AGENT_NAME}"
+    source_workspace = Path.home() / ".openclaw" / "workspace"
+
+    if not agent_dir.exists():
+        subprocess.run(
+            [
+                "openclaw", "agents", "add", EVAL_AGENT_NAME,
+                "--workspace", str(agent_workspace),
+                "--non-interactive",
+            ],
+            timeout=timeout,
+            capture_output=True,
+            check=True,
+        )
+
+        for md_file in source_workspace.glob("*.md"):
+            if md_file.name == "BOOTSTRAP.md":
+                continue
+            shutil.copy2(md_file, agent_workspace / md_file.name)
+
+    return EVAL_AGENT_NAME
 
 
 

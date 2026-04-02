@@ -7,63 +7,49 @@ by sending HTTP requests to the OpenClaw API.
 
 import argparse
 import json
+import os
 import re
-import shutil
+import signal
 import subprocess
 import sys
 from pathlib import Path
 
-from scripts.utils import parse_skill_md
-
-EVAL_AGENT_NAME = "description-improvement"
+from scripts.utils import EVAL_AGENT_NAME, ensure_eval_agent, parse_skill_md
 
 
-def _ensure_eval_agent(timeout: int = 60) -> str:
-    """Ensure the eval agent exists, creating it if needed. Returns agent name."""
-    agent_dir = Path.home() / ".openclaw" / "agents" / EVAL_AGENT_NAME
-    if not agent_dir.exists():
-        agent_workspace = Path.home() / ".openclaw" / f"workspace-{EVAL_AGENT_NAME}"
-        source_workspace = Path.home() / ".openclaw" / "workspace"
-        subprocess.run(
-            [
-                "openclaw", "agents", "add", EVAL_AGENT_NAME,
-                "--workspace", str(agent_workspace),
-                "--non-interactive",
-            ],
-            timeout=timeout,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=True,
-        )
-        for md_file in source_workspace.glob("*.md"):
-            if md_file.name == "BOOTSTRAP.md":
-                continue
-            shutil.copy2(md_file, agent_workspace / md_file.name)
-    return EVAL_AGENT_NAME
-
-
-def _call_openclaw(prompt: str, model: str | None = None, timeout: int = 600) -> str:
+def _call_openclaw(prompt: str, agent_name: str, model: str | None = None, timeout: int = 600) -> str:
     """Send a prompt to the OpenClaw CLI agent and return the text response.
 
     Uses /new prefix to start a fresh context each time.
+    The agent must already exist (call ensure_eval_agent() first).
     """
-    agent_name = _ensure_eval_agent(timeout)
 
-    result = subprocess.run(
+    proc = subprocess.Popen(
         [
             "openclaw", "agent",
             "--agent", agent_name,
+            "--local",
             "--message", f"/new {prompt}",
         ],
-        timeout=timeout,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
+        start_new_session=True,
     )
+    try:
+        content, _ = proc.communicate(timeout=timeout)
+        content = content.strip()
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        except OSError:
+            proc.kill()
+        proc.wait(timeout=5)
+        raise RuntimeError(f"OpenClaw CLI timed out after {timeout}s")
 
-    content = result.stdout.strip()
     if not content:
         raise RuntimeError(
-            f"OpenClaw CLI returned empty content (exit code {result.returncode})"
+            f"OpenClaw CLI returned empty content (exit code {proc.returncode})"
         )
 
     return content
@@ -79,6 +65,7 @@ def improve_description(
     test_results: dict | None = None,
     log_dir: Path | None = None,
     iteration: int | None = None,
+    agent_name: str = EVAL_AGENT_NAME,
 ) -> str:
     """Call Claude to improve the description based on eval results."""
     failed_triggers = [
@@ -163,7 +150,7 @@ I'd encourage you to be creative and mix up the style in different iterations si
 
 Please respond with only the new description text in <new_description> tags, nothing else."""
 
-    text = _call_openclaw(prompt, model)
+    text = _call_openclaw(prompt, agent_name, model)
 
     match = re.search(r"<new_description>(.*?)</new_description>", text, re.DOTALL)
     description = match.group(1).strip().strip('"') if match else text.strip().strip('"')
@@ -193,7 +180,7 @@ Please respond with only the new description text in <new_description> tags, not
             f"important trigger words and intent coverage. Respond with only "
             f"the new description in <new_description> tags."
         )
-        shorten_text = _call_openclaw(shorten_prompt, model)
+        shorten_text = _call_openclaw(shorten_prompt, agent_name, model)
         match = re.search(r"<new_description>(.*?)</new_description>", shorten_text, re.DOTALL)
         shortened = match.group(1).strip().strip('"') if match else shorten_text.strip().strip('"')
 
@@ -234,6 +221,7 @@ def main():
 
     name, _, content = parse_skill_md(skill_path)
     current_description = eval_results["description"]
+    agent_name = ensure_eval_agent()
 
     if args.verbose:
         print(f"Current: {current_description}", file=sys.stderr)
@@ -246,6 +234,7 @@ def main():
         eval_results=eval_results,
         history=history,
         model=args.model,
+        agent_name=agent_name,
     )
 
     if args.verbose:

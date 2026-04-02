@@ -6,7 +6,7 @@ for a set of queries. Outputs results as JSON.
 
 Adapted for OpenClaw: uses `openclaw agent` instead of `claude -p`.
 
-Strategy: Creates a temporary skill in ~/.openclaw/workspace/skills/, sends the raw
+Strategy: Creates a temporary skill in ~/.openclaw/skills/, sends the raw
 user query via `openclaw agent`, then inspects the session log for a `read`
 toolCall targeting the temporary skill's SKILL.md path — the same mechanism
 OpenClaw uses natively to trigger skills.
@@ -14,21 +14,15 @@ OpenClaw uses natively to trigger skills.
 
 import argparse
 import json
+import os
 import shutil
+import signal
 import subprocess
 import sys
 import uuid
 from pathlib import Path
 
-from scripts.utils import parse_skill_md
-
-
-EVAL_AGENT_NAME = "description-improvement"
-
-
-def get_skills_dir() -> Path:
-    """Return the OpenClaw user skills directory."""
-    return Path.home() / ".openclaw" / "workspace" / "skills"
+from scripts.utils import EVAL_AGENT_NAME, ensure_eval_agent, get_skills_dir, parse_skill_md
 
 
 def _find_latest_session_log(agent_name: str) -> Path | None:
@@ -84,7 +78,7 @@ def _check_new_lines_for_skill_read(
                     if block.get("name") != "read":
                         continue
                     arguments = block.get("arguments", {})
-                    file_path = arguments.get("path", "")
+                    file_path = arguments.get("file", "") or arguments.get("path", "")
                     if skill_path_fragment in file_path:
                         return True
     except OSError:
@@ -128,17 +122,38 @@ def run_single_query(
         )
         temp_skill_file.write_text(skill_content)
 
+        # Snapshot session logs before running so we can clean up after
+        sessions_dir = Path.home() / ".openclaw" / "agents" / agent_name / "sessions"
+        pre_logs = set(sessions_dir.glob("*.jsonl")) if sessions_dir.exists() else set()
+
         # Send query via CLI in a fresh session (/new)
-        subprocess.run(
-            [
-                "openclaw", "agent",
-                "--agent", agent_name,
-                "--message", f"/new {query}",
-            ],
-            timeout=timeout,
+        # Use Popen + process group to kill entire tree on timeout
+        cmd = [
+            "openclaw", "agent",
+            "--agent", agent_name,
+            "--local",
+            "--message", f"/new {query}",
+        ]
+        proc = subprocess.Popen(
+            cmd,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
         )
+        try:
+            _, stderr_data = proc.communicate(timeout=timeout)
+            if proc.returncode != 0:
+                stderr_text = stderr_data.decode(errors="replace").strip()
+                if stderr_text:
+                    print(f"  Warning: openclaw agent returned {proc.returncode}: {stderr_text[:200]}", file=sys.stderr)
+        except subprocess.TimeoutExpired:
+            # Kill the entire process group (openclaw + any child Node processes)
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            except OSError:
+                proc.kill()
+            proc.wait(timeout=5)
+            print(f"  Warning: query timed out after {timeout}s", file=sys.stderr)
 
         # Check the latest session log for skill trigger
         session_log = _find_latest_session_log(agent_name)
@@ -157,6 +172,14 @@ def run_single_query(
     finally:
         if temp_skill_dir.exists():
             shutil.rmtree(temp_skill_dir, ignore_errors=True)
+        # Clean up session logs created by this query to free memory/disk
+        if sessions_dir.exists():
+            for log in sessions_dir.glob("*.jsonl"):
+                if log not in pre_logs:
+                    try:
+                        log.unlink()
+                    except OSError:
+                        pass
 
 
 def run_eval(
@@ -168,46 +191,25 @@ def run_eval(
     runs_per_query: int = 1,
     trigger_threshold: float = 0.5,
     model: str | None = None,
+    agent_name: str = EVAL_AGENT_NAME,
 ) -> dict:
     """Run the full eval set sequentially and return results.
 
-    Creates a single temporary agent with an isolated workspace for the
-    entire eval run.  Each query uses /new to start a fresh context.
+    The eval agent must already exist (call ensure_eval_agent() first).
+    Each query uses /new to start a fresh context.
     """
-    agent_name = EVAL_AGENT_NAME
-    agent_workspace = Path.home() / ".openclaw" / f"workspace-{agent_name}"
-    source_workspace = Path.home() / ".openclaw" / "workspace"
-    agent_dir = Path.home() / ".openclaw" / "agents" / agent_name
-
-    # Create the eval agent if it doesn't already exist
-    if not agent_dir.exists():
-        subprocess.run(
-            [
-                "openclaw", "agents", "add", agent_name,
-                "--workspace", str(agent_workspace),
-                "--non-interactive",
-            ],
-            timeout=timeout,
-            capture_output=True,
-            check=True,
-        )
-
-        # Copy .md files from source workspace to the new workspace
-        for md_file in source_workspace.glob("*.md"):
-            if md_file.name == "BOOTSTRAP.md":
-                continue
-            shutil.copy2(md_file, agent_workspace / md_file.name)
-
     results = []
 
     query_triggers: dict[str, list[bool]] = {}
     query_items: dict[str, dict] = {}
-    for item in eval_set:
+    total_queries = len(eval_set)
+    for qi, item in enumerate(eval_set, 1):
         query = item["query"]
         query_items[query] = item
         if query not in query_triggers:
             query_triggers[query] = []
-        for _ in range(runs_per_query):
+        for run_i in range(runs_per_query):
+            print(f"  [{qi}/{total_queries}] run {run_i+1}/{runs_per_query}: {query[:60]}", file=sys.stderr)
             try:
                 triggered = run_single_query(
                     query,
@@ -219,8 +221,9 @@ def run_eval(
                     model,
                 )
                 query_triggers[query].append(triggered)
+                print(f"    -> {'TRIGGERED' if triggered else 'not triggered'}", file=sys.stderr)
             except Exception as e:
-                print(f"Warning: query failed: {e}", file=sys.stderr)
+                print(f"    -> ERROR: {e}", file=sys.stderr)
                 query_triggers[query].append(False)
 
     for query, triggers in query_triggers.items():
@@ -261,7 +264,7 @@ def main():
     parser.add_argument("--skill-path", required=True, help="Path to skill directory")
     parser.add_argument("--description", default=None, help="Override description to test")
     parser.add_argument("--timeout", type=int, default=60, help="Timeout per query in seconds")
-    parser.add_argument("--runs-per-query", type=int, default=3, help="Number of runs per query")
+    parser.add_argument("--runs-per-query", type=int, default=1, help="Number of runs per query")
     parser.add_argument("--trigger-threshold", type=float, default=0.5, help="Trigger rate threshold")
     parser.add_argument("--model", default=None, help="Model (unused — openclaw uses its configured model)")
     parser.add_argument("--verbose", action="store_true", help="Print progress to stderr")
@@ -277,6 +280,7 @@ def main():
     name, original_description, content = parse_skill_md(skill_path)
     description = args.description or original_description
     skills_dir = get_skills_dir()
+    agent_name = ensure_eval_agent(timeout=args.timeout)
 
     if args.verbose:
         print(f"Evaluating: {description}", file=sys.stderr)
@@ -290,6 +294,7 @@ def main():
         runs_per_query=args.runs_per_query,
         trigger_threshold=args.trigger_threshold,
         model=args.model,
+        agent_name=agent_name,
     )
 
     if args.verbose:

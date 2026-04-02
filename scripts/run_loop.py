@@ -14,8 +14,8 @@ import time
 from pathlib import Path
 
 from scripts.improve_description import improve_description
-from scripts.run_eval import get_skills_dir, run_eval
-from scripts.utils import parse_skill_md
+from scripts.run_eval import run_eval
+from scripts.utils import ensure_eval_agent, get_skills_dir, parse_skill_md
 
 
 def split_eval_set(eval_set: list[dict], holdout: float, seed: int = 42) -> tuple[list[dict], list[dict]]:
@@ -56,6 +56,7 @@ def run_loop(
 ) -> dict:
     """Run the eval + improvement loop."""
     skills_dir = get_skills_dir()
+    agent_name = ensure_eval_agent()
     name, original_description, content = parse_skill_md(skill_path)
     current_description = description_override or original_description
 
@@ -90,6 +91,7 @@ def run_loop(
             runs_per_query=runs_per_query,
             trigger_threshold=trigger_threshold,
             model=model,
+            agent_name=agent_name,
         )
         eval_elapsed = time.time() - t0
 
@@ -181,6 +183,7 @@ def run_loop(
             model=model,
             log_dir=log_dir,
             iteration=iteration,
+            agent_name=agent_name,
         )
         improve_elapsed = time.time() - t0
 
@@ -224,7 +227,7 @@ def main():
     parser.add_argument("--description", default=None, help="Override starting description")
     parser.add_argument("--timeout", type=int, default=30, help="Timeout per query in seconds")
     parser.add_argument("--max-iterations", type=int, default=5, help="Max improvement iterations")
-    parser.add_argument("--runs-per-query", type=int, default=3, help="Number of runs per query")
+    parser.add_argument("--runs-per-query", type=int, default=1, help="Number of runs per query")
     parser.add_argument("--trigger-threshold", type=float, default=0.5, help="Trigger rate threshold")
     parser.add_argument("--holdout", type=float, default=0.4, help="Fraction of eval set to hold out for testing (0 to disable)")
     parser.add_argument("--model", default=None, help="Model (unused — openclaw uses its configured model)")
@@ -234,10 +237,6 @@ def main():
 
     eval_set = json.loads(Path(args.eval_set).read_text())
     skill_path = Path(args.skill_path)
-
-    if not (skill_path / "SKILL.md").exists():
-        print(f"Error: No SKILL.md found at {skill_path}", file=sys.stderr)
-        sys.exit(1)
 
     # Determine output directory
     if args.results_dir:

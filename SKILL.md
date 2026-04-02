@@ -157,9 +157,9 @@ For rigorous A/B comparison between two skill versions, read `agents/comparator.
 
 After finishing the skill, offer to optimize the description. When the user accepts, follow this protocol strictly. See `references/description-optimization.md` for query quality guidelines.
 
-### D1: Create 20 eval queries
+### D1: Create 12 eval queries
 
-8–10 should-trigger and 8–10 should-not-trigger. Queries must be realistic and detailed (file paths, casual speech, typos — not generic). Save as JSON:
+6 should-trigger and 6 should-not-trigger. Queries must be realistic and detailed (file paths, casual speech, typos — not generic). Save as JSON:
 ```json
 [
   {"query": "the user prompt", "should_trigger": true},
@@ -173,16 +173,7 @@ Present queries grouped by category, get user edits, confirm final set. Save to 
 
 ### D3: Run `run_loop.py` (mandatory — no manual alternative)
 
-```bash
-cd ~/.openclaw/workspace/skills/skill-creator && python3 -m scripts.run_loop \
-  --eval-set <path-to-trigger-eval.json> \
-  --skill-path <path-to-skill> \
-  --max-iterations 5 \
-  --verbose \
-  --results-dir <workspace>/description-optimization
-```
-
-Run in background. Periodically tail output to update the user. Outputs `results.json` with `best_description`, scores, and history.
+Follow the exact run command and output handling instructions in `references/description-optimization.md` Step 3. **Critical:** all stdout/stderr must be redirected to files — never capture loop output directly into the conversation, or the context will overflow.
 
 ### D5: Present and apply
 
