@@ -19,7 +19,7 @@ The process looks like this:
 **Common failure modes (hard rules — violating any of these is a bug):**
 1. **Writing without talking to the user first** — Step 1 is not optional.
 2. **Skipping the eval consent question** — After drafting the skill you MUST ask "Would you like me to run evaluations?" and wait for an answer. This is the single most frequently skipped step.
-3. **Skipping grading/aggregation or doing it manually** — Always use the provided scripts.
+3. **Skipping grading/aggregation or doing it manually** — After runs complete, you MUST grade every run via `agents/grader.md` and aggregate via `scripts.aggregate_benchmark`. This is the most commonly skipped substep. If you find yourself presenting results without `grading.json` files and a `benchmark.md`, STOP — you skipped grading. Go back and do it.
 
 ---
 
@@ -78,7 +78,7 @@ Save to `evals/evals.json` (see `references/schemas.md` for full schema includin
 
 ## Step 4: Run the evals
 
-Complete every substep (4a–4d) before moving on. Every test case needs **both** a with-skill and without-skill (baseline) run from actual subagent execution. Never fabricate results. Never present results without running the aggregate script.
+Complete every substep (4a–4d) before moving on. Every test case needs **both** a with-skill and without-skill (baseline) run from actual subagent execution. Never fabricate results. Never present results without running the grader and aggregate script. **Runs without grading are worthless — Step 4d is not optional.**
 
 Results go in `<skill-name>-workspace/iteration-<N>/<eval-name>/`.
 
@@ -118,22 +118,26 @@ When each subagent finishes, save `timing.json` immediately — this data cannot
 }
 ```
 
-### 4d: Grade, aggregate, and present
+### 4d: Grade, aggregate, and present — MANDATORY, DO NOT SKIP
+
+**THIS IS A HARD CHECKPOINT.** You may NOT present results, move to Step 5, or claim the eval is complete until every run has a `grading.json` and `benchmark.md` exists. If you are about to summarize eval results without having graded, STOP — you are skipping grading.
 
 Complete all four substeps before moving on.
 
-**1. Grade each run via grader subagent (serial, one at a time):**
-The grader prompt must instruct the subagent to **read `agents/grader.md` first and follow it exactly**. Pass it: expectations from `eval_metadata.json`, transcript path, outputs directory. Output: `grading.json` in the run directory (schema in `references/schemas.md`). Wait until every run has a valid `grading.json`.
+**1. Grade each run via grader subagent (serial, one at a time) — NO EXCEPTIONS:**
+The grader prompt must instruct the subagent to **read `agents/grader.md` first and follow it exactly**. Pass it: expectations from `eval_metadata.json`, transcript path, outputs directory. Output: `grading.json` in the run directory (schema in `references/schemas.md`). **Wait until every run has a valid `grading.json`. Do not proceed without them.**
 
 **2. Aggregate via script (mandatory — no manual substitute):**
 ```bash
 cd /home/xyclaw/.openclaw/workspace/skills/skill-creator && python3 -m scripts.aggregate_benchmark <workspace>/iteration-N --skill-name <name>
 ```
-Produces `benchmark.json` and `benchmark.md`. Verify both exist.
+Produces `benchmark.json` and `benchmark.md`. **Verify both files exist before proceeding.** If either is missing, the eval is incomplete.
 
 **3. Analyst pass:** Read `benchmark.md`, surface patterns per `agents/analyzer.md`.
 
 **4. Present results:** Walk through each test case: prompt, with-skill vs. baseline comparison (pass rates, timing, tokens), key excerpts, deltas, `eval_feedback`. Ask "Any feedback?" per case. Show overall summary from `benchmark.md` at the end.
+
+**Self-check before presenting:** Confirm that (a) every run directory contains `grading.json`, (b) `benchmark.md` exists, (c) you are presenting graded scores, not your own assessment. If any of these are false, go back and fix it.
 
 ---
 
