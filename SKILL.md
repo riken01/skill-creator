@@ -78,21 +78,15 @@ Save to `evals/evals.json` (see `references/schemas.md` for full schema includin
 
 ## Step 4: Run the evals
 
-Complete every substep (4a–4d) before moving on. Every test case needs **both** a with-skill and without-skill (baseline) run from actual subagent execution. Never fabricate results. Never present results without running the grader and aggregate script. **Runs without grading are worthless — Step 4d is not optional.**
+Complete every substep (4a–4b) before moving on. Every test case needs **both** a with-skill and without-skill (baseline) run from actual subagent execution. Never fabricate results. Never present results without running the grader and aggregate script. **Runs without grading are worthless — Step 4b is not optional.**
 
-Results go in `<skill-name>-workspace/iteration-<N>/<eval-name>/`.
+Results go in `<skill-name>-workspace/iteration-<N>/eval-<N>/`.
 
-### 4a: Run each case sequentially — both with-skill AND without-skill
+### 4a: For each test case — write metadata, run both configs, capture timing
 
-For each test case, run two subagents sequentially. Both are mandatory.
+Process each test case **sequentially and completely** before moving to the next. For each test case:
 
-**With-skill run:** Provide the skill path, task prompt, input files, and output directory (`with_skill/outputs/`). Include in the prompt: "You are running non-interactively — no human will provide stdin. Feed expected inputs via heredoc/pipe. Never leave a command waiting for stdin."
-
-**Without-skill (baseline) run:** Same prompt without the skill path, save to `without_skill/outputs/`. For existing skill improvement: snapshot first, point baseline at snapshot, save to `old_skill/outputs/`.
-
-If a run fails: diagnose and retry. Do not proceed to grading with missing runs.
-
-Write `eval_metadata.json` per test case:
+**1. Write `eval_metadata.json`** in the eval directory (`eval-<N>/eval_metadata.json`). Copy the expectations confirmed in Step 3a — do not re-draft, use what the user already approved. Ensure `evals/evals.json` is also up to date.
 ```json
 {
   "eval_id": 0,
@@ -102,14 +96,9 @@ Write `eval_metadata.json` per test case:
 }
 ```
 
-### 4b: Write expectations to eval_metadata.json
+**2. Run with-skill subagent.** Provide the skill path, task prompt, input files, and output directory (`with_skill/outputs/`). Include in the prompt: "You are running non-interactively — no human will provide stdin. Feed expected inputs via heredoc/pipe. Never leave a command waiting for stdin."
 
-Copy the expectations confirmed in Step 3a into each test case's `eval_metadata.json` and ensure `evals/evals.json` is up to date. Do not re-draft — use what the user already approved.
-
-### 4c: Capture timing data immediately
-
-When each subagent finishes, save `timing.json` immediately — this data cannot be recovered later:
-
+**3. IMMEDIATELY save `with_skill/timing.json`.** Do this the moment the subagent finishes — this data cannot be recovered later. Do NOT defer this to a later step.
 ```json
 {
   "total_tokens": 84852,
@@ -118,18 +107,24 @@ When each subagent finishes, save `timing.json` immediately — this data cannot
 }
 ```
 
-### 4d: Grade, aggregate, and present — MANDATORY, DO NOT SKIP
+**4. Run without-skill (baseline) subagent.** Same prompt without the skill path, save to `without_skill/outputs/`. For existing skill improvement: snapshot first, point baseline at snapshot, save to `old_skill/outputs/`.
+
+**5. IMMEDIATELY save `without_skill/timing.json`.** Same rule — capture it right now, not later.
+
+If a run fails: diagnose and retry. Do not proceed to grading with missing runs.
+
+### 4b: Grade, aggregate, and present — MANDATORY, DO NOT SKIP
 
 **THIS IS A HARD CHECKPOINT.** You may NOT present results, move to Step 5, or claim the eval is complete until every run has a `grading.json` and `benchmark.md` exists. If you are about to summarize eval results without having graded, STOP — you are skipping grading.
 
-Complete all four substeps before moving on.
+Complete all substeps below before moving on.
 
 **1. Grade each run via grader subagent (serial, one at a time) — NO EXCEPTIONS:**
 The grader prompt must instruct the subagent to **read `agents/grader.md` first and follow it exactly**. Pass it: expectations from `eval_metadata.json`, transcript path, outputs directory. Output: `grading.json` in the run directory (schema in `references/schemas.md`). **Wait until every run has a valid `grading.json`. Do not proceed without them.**
 
 **2. Aggregate via script (mandatory — no manual substitute):**
 ```bash
-cd /home/xyclaw/.openclaw/workspace/skills/skill-creator && python3 -m scripts.aggregate_benchmark <workspace>/iteration-N --skill-name <name>
+cd ~/.openclaw/workspace/skills/skill-creator && python3 -m scripts.aggregate_benchmark <workspace>/iteration-N --skill-name <name>
 ```
 Produces `benchmark.json` and `benchmark.md`. **Verify both files exist before proceeding.** If either is missing, the eval is incomplete.
 
@@ -200,7 +195,7 @@ python3 -m scripts.package_skill <path/to/skill-folder>
 OpenClaw loads skills from `~/.openclaw/workspace/skills/`. Newly installed skills are available in the next conversation turn.
 
 - **Skill injection for eval**: Temporary skills go in `~/.openclaw/workspace/skills/<unique-name>/` and are cleaned up automatically by `run_eval.py`.
-- **Description optimization**: Uses the OpenClaw HTTP API with a unique `x-openclaw-session-key` per query to create isolated sessions. This is handled by `run_eval.py` — no manual session management needed.
+- **Description optimization**: Creates a new agent for each query to achieve session isolation. This is handled by `run_eval.py` — no manual session management needed.
 - **Updating an existing skill**: Preserve the original directory name and `name` frontmatter. Copy to `/tmp/skill-name/` before editing if the installed path is read-only.
 
 ---
