@@ -71,10 +71,15 @@ cd ~/.openclaw/workspace/skills/skill-creator && python3 -m scripts.run_loop \
 
 The `--model` parameter is optional — openclaw uses its configured model automatically.
 
-**While it runs:** to check progress, tail only the last ~10 lines of `loop.log`. Do NOT read the full log.
+**While it runs:** Check `status.json` in the results subdirectory before taking any action. **NEVER rerun the script if status is "running"** — the process spawns many `openclaw agent` subprocesses, and running multiple instances simultaneously will exhaust memory.
 
+To check progress:
 ```bash
-tail -10 <workspace>/description-optimization/loop.log
+# First: is it still running?
+cat <workspace>/description-optimization/*/status.json
+# If status is "running", just tail the log — do NOT rerun:
+tail -10 <workspace>/description-optimization/*/loop.log
+# If status.json doesn't exist or the directory is empty, the script may have crashed — only then is it safe to rerun.
 ```
 
 This handles the full optimization loop automatically. It splits the eval set into 60% train and 40% held-out test, evaluates the current description (running each query 3 times to get a reliable trigger rate), then calls the agent to propose improvements based on what failed. It re-evaluates each new description on both train and test, iterating up to 5 times.

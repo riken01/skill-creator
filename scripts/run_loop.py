@@ -8,6 +8,7 @@ overfitting.
 
 import argparse
 import json
+import os
 import random
 import sys
 import time
@@ -246,6 +247,11 @@ def main():
     else:
         results_dir = None
 
+    # Write status file so callers can distinguish "still running" from "failed"
+    status_file = results_dir / "status.json" if results_dir else None
+    if status_file:
+        status_file.write_text(json.dumps({"status": "running", "pid": os.getpid(), "started_at": timestamp}))
+
     log_dir = results_dir / "logs" if results_dir else None
 
     output = run_loop(
@@ -266,6 +272,9 @@ def main():
     print(json_output)
     if results_dir:
         (results_dir / "results.json").write_text(json_output)
+        # Update status to complete
+        if status_file:
+            status_file.write_text(json.dumps({"status": "complete", "pid": os.getpid(), "started_at": timestamp}))
         print(f"Results saved to: {results_dir}", file=sys.stderr)
 
 

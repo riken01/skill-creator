@@ -78,7 +78,7 @@ Save to `evals/evals.json` (see `references/schemas.md` for full schema includin
 
 ## Step 4: Run the evals
 
-Complete every substep (4a–4b) before moving on. Every test case needs **both** a with-skill and without-skill (baseline) run from actual subagent execution. Never fabricate results. Never present results without running the grader and aggregate script. **Runs without grading are worthless — Step 4b is not optional.**
+Complete every substep (4a–4b) before moving on. Every test case needs **both** a with-skill run and a baseline run (without-skill for new skills, old-skill for existing skill improvements) from actual subagent execution. Never fabricate results. Never present results without running the grader and aggregate script. **Runs without grading are worthless — Step 4b is not optional.**
 
 Results go in `<skill-name>-workspace/iteration-<N>/eval-<N>/`.
 
@@ -107,9 +107,11 @@ Process each test case **sequentially and completely** before moving to the next
 }
 ```
 
-**4. Run without-skill (baseline) subagent.** Same prompt without the skill path, save to `without_skill/outputs/`. For existing skill improvement: snapshot first, point baseline at snapshot, save to `old_skill/outputs/`.
+**4. Run baseline subagent.** The baseline depends on the scenario:
+- **New skill**: Run the same prompt *without* the skill path. Save to `without_skill/outputs/`.
+- **Improving an existing skill**: Snapshot the old skill first (copy to a temp location), then run the baseline subagent *with the old skill snapshot*. Save to `old_skill/outputs/`. Do NOT run a no-skill baseline — the comparison must be old version vs new version.
 
-**5. IMMEDIATELY save `without_skill/timing.json`.** Same rule — capture it right now, not later.
+**5. IMMEDIATELY save baseline `timing.json`** (in `without_skill/` or `old_skill/` depending on scenario). Same rule — capture it right now, not later.
 
 If a run fails: diagnose and retry. Do not proceed to grading with missing runs.
 
