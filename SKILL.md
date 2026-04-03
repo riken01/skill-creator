@@ -14,7 +14,7 @@ The process looks like this:
 - **Ask the user if they want evals** — get explicit consent
 - If yes: propose test cases, run both with-skill and without-skill, grade via `agents/grader.md`, aggregate via `scripts/aggregate_benchmark`, present benchmark report
 - Iterate until satisfied
-- Optionally optimize description via `scripts/run_loop.py`
+- Optionally optimize description (agent-driven loop — see D3 below)
 
 **Common failure modes (hard rules — violating any of these is a bug):**
 1. **Writing without talking to the user first** — Step 1 is not optional.
@@ -156,29 +156,9 @@ For rigorous A/B comparison between two skill versions, read `agents/comparator.
 
 ## Description Optimization
 
-After finishing the skill, offer to optimize the description. When the user accepts, follow this protocol strictly. See `references/description-optimization.md` for query quality guidelines.
+After finishing the skill, offer to optimize the description. When the user accepts:
 
-### D1: Create 12 eval queries
-
-6 should-trigger and 6 should-not-trigger. Queries must be realistic and detailed (file paths, casual speech, typos — not generic). Save as JSON:
-```json
-[
-  {"query": "the user prompt", "should_trigger": true},
-  {"query": "another prompt", "should_trigger": false}
-]
-```
-
-### D2: Review with the user
-
-Present queries grouped by category, get user edits, confirm final set. Save to `<workspace>/trigger_eval.json`. Do not proceed until confirmed.
-
-### D3: Run `run_loop.py` (mandatory — no manual alternative)
-
-Follow the exact run command and output handling instructions in `references/description-optimization.md` Step 3. **Critical:** all stdout/stderr must be redirected to files — never capture loop output directly into the conversation, or the context will overflow.
-
-### D5: Present and apply
-
-Show original vs. best description, train/test scores, iteration count, key observations. If user approves, update SKILL.md frontmatter. Point user to the HTML report.
+**MANDATORY: Read `references/description-optimization.md` NOW before doing anything else.** That file contains the complete protocol — query generation, review, the agent-driven eval loop, trigger detection, and scoring. Do NOT proceed from memory or improvise. Read it, then follow it step by step.
 
 ---
 
@@ -196,8 +176,8 @@ python3 -m scripts.package_skill <path/to/skill-folder>
 
 OpenClaw loads skills from `~/.openclaw/workspace/skills/`. Newly installed skills are available in the next conversation turn.
 
-- **Skill injection for eval**: Temporary skills go in `~/.openclaw/workspace/skills/<unique-name>/` and are cleaned up automatically by `run_eval.py`.
-- **Description optimization**: Creates a new agent for each query to achieve session isolation. This is handled by `run_eval.py` — no manual session management needed.
+- **Skill injection for eval**: Temporary skills go in `~/.openclaw/workspace/skills/_eval-<name>-<hex>/` — you create and clean them up during the D3 loop.
+- **Description optimization**: You drive the loop directly by spawning subagents, checking session logs for trigger detection, and cancelling early. No external scripts needed.
 - **Updating an existing skill**: Preserve the original directory name and `name` frontmatter. Copy to `/tmp/skill-name/` before editing if the installed path is read-only.
 
 ---

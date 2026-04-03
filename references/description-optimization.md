@@ -1,8 +1,10 @@
-## Description Optimization
+## Description Optimization — Complete Protocol
 
-The description field in SKILL.md frontmatter is the primary mechanism that determines whether the agent invokes a skill. After creating or improving a skill, offer to optimize the description for better triggering accuracy.
+The description field in SKILL.md frontmatter is the primary mechanism that determines whether the agent invokes a skill. This document contains the full protocol for optimizing it. Follow every step in order.
 
-### Step 1: Generate trigger eval queries
+---
+
+### Step 1: Generate 12 trigger eval queries
 
 Create 12 eval queries — 6 should-trigger and 6 should-not-trigger. Save as JSON:
 
@@ -24,6 +26,8 @@ For the **should-trigger** queries (6), think about coverage. You want different
 For the **should-not-trigger** queries (6), the most valuable ones are the near-misses — queries that share keywords or concepts with the skill but actually need something different. Think adjacent domains, ambiguous phrasing where a naive keyword match would trigger but shouldn't, and cases where the query touches on something the skill does but in a context where another tool is more appropriate.
 
 The key thing to avoid: don't make should-not-trigger queries obviously irrelevant. "Write a fibonacci function" as a negative test for a PDF skill is too easy — it doesn't test anything. The negative cases should be genuinely tricky.
+
+---
 
 ### Step 2: Review with user
 
@@ -49,49 +53,111 @@ Present the eval set to the user conversationally for review:
 
 3. Apply the user's edits and confirm the final eval set. If the user suggests changes, show the updated list and confirm again.
 
-4. Once confirmed, save the final eval set as a JSON file (e.g., `<workspace>/trigger_eval.json`) in the same format as Step 1 — this file is required by `run_loop.py --eval-set` in the next step.
+4. Once confirmed, save the final eval set as a JSON file (e.g., `<workspace>/trigger_eval.json`).
 
 This step matters — bad eval queries lead to bad descriptions.
 
-### Step 3: Run the optimization loop
+---
 
-Tell the user: "This will take some time — I'll run the optimization loop in the background and check on it periodically."
+### Step 3: Run the optimization loop (agent-driven)
 
-Save the eval set to the workspace, then run in the background. **Critical: redirect all output to files to avoid blowing up the conversation context.**
+You drive the loop directly. For each iteration, test every query by spawning a subagent, checking if it reads the temp skill, and cancelling early when triggered.
 
-```bash
-cd ~/.openclaw/workspace/skills/skill-creator && python3 -m scripts.run_loop \
-  --eval-set <path-to-trigger-eval.json> \
-  --skill-path <path-to-skill> \
-  --max-iterations 5 \
-  --verbose \
-  --results-dir <workspace>/description-optimization \
-  2> <workspace>/description-optimization/loop.log
+#### Setup
+
+1. **Split eval set:** 60% train, 40% test (stratified by should_trigger). Use a fixed seed for reproducibility.
+2. **Create results workspace:** `<workspace>/description-optimization/`
+3. **Set** `current_description` = skill's current description from frontmatter.
+
+#### For each iteration (1 to 5):
+
+**A. Evaluate all queries**
+
+For each query in `train_set + test_set`:
+
+1. **Create temp skill:** Write a temporary `SKILL.md` at `~/.openclaw/workspace/skills/_eval-<skill-name>-<random-8-hex>/SKILL.md` with:
+   ```yaml
+   ---
+   name: _eval-<skill-name>-<hex>
+   description: |
+     <current_description>
+   ---
+   # _eval-<skill-name>-<hex>
+   This skill handles: <current_description>
+   ```
+
+2. **Spawn subagent** with the raw query as the task. Note the `runId` returned by `sessions_spawn`.
+
+3. **Monitor for trigger:** While the subagent is running, check its session log for a `read` toolCall targeting the temp skill. See "How to find the session log" and "How to detect trigger" below.
+   - **If triggered** (read detected): Cancel the subagent immediately. Record `triggered: true`.
+   - **If subagent completes** without triggering: Record `triggered: false`.
+
+4. **Cleanup:** Delete the temp skill directory.
+
+5. **Record result:** `{query, should_trigger, triggered, pass}` where `pass = (should_trigger == triggered)`.
+
+**B. Compute scores**
+
+Split results back into train/test by matching queries. Compute for each set:
+- passed / total
+- precision = TP / (TP + FP)
+- recall = TP / (TP + FN)
+- accuracy = (TP + TN) / total
+
+**C. Check exit conditions**
+
+- All train queries pass → exit with "all_passed"
+- Max iterations (5) reached → exit with "max_iterations"
+- Otherwise → continue to D
+
+**D. Improve description**
+
+Analyze **train failures only** (do NOT look at test results — this prevents overfitting). Consider:
+- Which should-trigger queries failed to trigger? Why might the description miss them?
+- Which should-not-trigger queries falsely triggered? What's too broad?
+
+Write a new description (100–200 words, hard limit 1024 chars). Rules:
+- Generalize from failures — don't list specific queries.
+- Try structurally different phrasings each iteration.
+- Use imperative form ("Use this skill for...").
+- Focus on user intent, not implementation details.
+
+Update `current_description` and continue the loop.
+
+**E. Log iteration**
+
+Append to `<workspace>/description-optimization/history.json`:
+```json
+{
+  "iteration": N,
+  "description": "...",
+  "train_passed": X, "train_total": Y,
+  "test_passed": X, "test_total": Y
+}
 ```
 
-The `--model` parameter is optional — openclaw uses its configured model automatically.
+**After loop:** Select the best iteration by **test score** (or train if no test set).
 
-**While it runs:** Check `status.json` in the results subdirectory before taking any action. **NEVER rerun the script if status is "running"** — the process spawns many `openclaw agent` subprocesses, and running multiple instances simultaneously will exhaust memory.
+---
 
-To check progress:
-```bash
-# First: is it still running?
-cat <workspace>/description-optimization/*/status.json
-# If status is "running", just tail the log — do NOT rerun:
-tail -10 <workspace>/description-optimization/*/loop.log
-# If status.json doesn't exist or the directory is empty, the script may have crashed — only then is it safe to rerun.
+### How to find the subagent's session log
+
+1. After spawning, note the `runId`.
+2. Read `~/.openclaw/subagents/runs.json` → find the run entry → get `startedAt` timestamp.
+3. In `~/.openclaw/agents/main/sessions/`, find the `.jsonl` file created at the closest timestamp that contains "Subagent Context" in its first few lines.
+
+### How to detect trigger
+
+Scan the session log for a `read` toolCall in the `message.content` array of any assistant message:
+
+```json
+{"type": "toolCall", "name": "read", "arguments": {"path": ".../_eval-<name>-<hex>/SKILL.md"}}
 ```
 
-This handles the full optimization loop automatically. It splits the eval set into 60% train and 40% held-out test, evaluates the current description (running each query 3 times to get a reliable trigger rate), then calls the agent to propose improvements based on what failed. It re-evaluates each new description on both train and test, iterating up to 5 times.
+Match on: the `path` (or `file`) argument contains the temp skill name fragment (e.g., `_eval-book-tracker-a1b2c3d4`).
 
-**After completion:** do NOT read the full `results.json` — it contains the complete history of every iteration and query, which will overflow the context. Extract only the summary:
+---
 
-```bash
-python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(json.dumps({k:d[k] for k in ('exit_reason','original_description','best_description','best_score','best_train_score','best_test_score','iterations_run')}, indent=2))" <workspace>/description-optimization/*/results.json
-```
+### Step 4: Present and apply
 
-Present `best_description`, scores, and iteration count to the user.
-
-### Step 4: Apply the result
-
-Take `best_description` from the JSON output and update the skill's SKILL.md frontmatter. Show the user before/after and report the scores.
+Show original vs. best description, train/test scores, iteration count, key observations. If user approves, update the skill's SKILL.md frontmatter with `best_description`.
