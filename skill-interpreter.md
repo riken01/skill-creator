@@ -122,6 +122,43 @@ const command: Command = {
 ```
 
 ### 选择skill
-1. skills激活后，进入动态的可用skill列表getDynamicSkills()，会参与模型选择。
+1. skills激活后，进入动态的可用skill列表，在SkillToll的getSkillToolCommands()可获取，会参与模型选择。
+2. 使用formatCommandsWithinBudget(commands, contextWindowTokens)构造成skills列表，拼接方式是name: description - when to use（可选）
+3. 控制列表的长度。使用三个常量：
+```
+SKILL_BUDGET_CONTEXT_PERCENT = 0.01
+MAX_LISTING_DESC_CHARS = 250
+MIN_DESC_LENGTH = 20
+```  
+  - 计算能放多少字符，如果上下文是200M的窗口，那么
+  - 每条描述截断到250个字符
+  - 
+  
 ### 使用skill
-1. 如果匹配，通过getPromptForCommand(...)获取该skill对应的prompt，注入prompt。
+1. 如果模型没有匹配skill，直接输出结果。如果匹配，模型会输出类似：
+```
+<tool_call>
+  name: SkillTool
+  args: { skill: "commit", args: "-m 'fix bug'" }
+</tool_call>
+```
+进行工具调用。
+
+2. 运行时捕获 tool call，agent runtime 会做：
+```
+`if (toolCall.name === "SkillTool") {
+  runSkillTool(toolCall.args)
+}
+```
+
+3. 在SkillTool内部：
+    - 首先，使用findCommand(skillName, commands)找到对应 Command
+    - 执行 getPromptForCommand
+    - 系统会把返回的 prompt 包装成一条特殊消息：
+    ```
+    <COMMAND_NAME>commit</COMMAND_NAME>
+    # Commit Skill
+    Generate a git commit message based on the diff...
+    ```
+
+4. runtime把这一段插入prompt的assistant部分重新推理。模型在后续的对话如果需要用到同样的skill，看到用 <COMMAND_NAME> 标签后，就不再进行toolCall，防止skill无限调用。
