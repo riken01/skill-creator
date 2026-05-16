@@ -130,10 +130,12 @@ Process each test case sequentially and completely.
 
 **2.** Run with-skill subagent. Pass skill path, task prompt, input files, output dir (`with_skill/outputs/`).
 
-**3.** **Immediately** save `with_skill/timing.json`. This data cannot be recovered later.
+**3.** **Immediately** save `with_skill/timing.json` using the values from the subagent's task notification. This data cannot be recovered later.
 ```json
 { "total_tokens": 84852, "duration_ms": 23332, "total_duration_seconds": 23.3 }
 ```
+
+**Never fabricate timing.** Fabricated timing poisons every downstream comparison and makes the whole eval untrustworthy.
 
 **4.** Run baseline subagent:
 - **New skill:** same prompt without the skill path → `without_skill/outputs/`.
