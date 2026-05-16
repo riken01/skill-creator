@@ -10,8 +10,8 @@ Save as `<workspace>/trigger_eval.json`:
 
 ```json
 [
-  {"query": "the user prompt", "should_trigger": true},
-  {"query": "another prompt", "should_trigger": false}
+  {"query": "...", "should_trigger": true},
+  {"query": "...", "should_trigger": false}
 ]
 ```
 
@@ -67,11 +67,17 @@ Apply edits, confirm again if changed. Save final set as JSON. **Do NOT skip thi
 **A. Patch.** Rewrite ONLY the `description:` field in `<skill-path>/SKILL.md` to `current_description`. Leave `name:` and the body untouched.
 
 **B. Run all 8 queries.** For each:
-1. Spawn a fresh subagent with the raw query as the task. Note the `runId`.
-2. Watch the session log for a `read` toolCall whose path contains `/<skill-name>/SKILL.md` (see detection guide below).
-   - Detected → cancel subagent, `triggered: true`.
-   - Subagent finishes without it → `triggered: false`.
+1. Spawn a fresh subagent with the raw query as the task, prefixed with the user's working directory. Do NOT mention the skill — that defeats trigger detection. Append a fixed reporting instruction to every query (verbatim):
+
+   > *"When you finish the task, end your reply with a single line in this exact format and nothing after it:* `SKILLS_USED: <comma-separated skill names, or 'none'>` *. List every skill you actually loaded or invoked. Do not list skills you only considered."*
+
+2. Wait for the subagent to finish, then parse its final reply for the `SKILLS_USED:` line.
+   - `<skill-name>` appears in the list → `triggered: true`.
+   - `none` (or the skill is absent) → `triggered: false`.
+   - Line missing or malformed → re-run that query once; if still missing, log `triggered: null` and treat as a failure for that query.
 3. `pass = (should_trigger == triggered)`.
+
+This replaces the older "watch the session log for a `read` toolCall" approach — log-scanning was unreliable across subagent backends. Asking the subagent to self-report is the contract that travels.
 
 **C. Score.** With TP/TN/FP/FN over the 8 results:
 - `passed / 8`
@@ -125,17 +131,3 @@ Use `mv` so the backup vanishes on success — a leftover `.bak-*` file means te
 2. Rank by: `passed` (higher better) → tie-break `precision` → tie-break `recall` → tie-break earliest `iteration` (prefer simpler/earlier when tied). Top entry's description = `best_description`.
 3. Show the user: original vs. `best_description`, per-iteration scores, exit reason, key observations (which queries flipped between iterations, what patterns failed).
 4. **Approved** → edit `<skill-path>/SKILL.md` and write `best_description` into `description:`. **Declined** → do nothing; teardown already restored the original.
-
----
-
-### How to find the subagent's session log
-
-Note the `runId` from `sessions_spawn` → look up `startedAt` in `~/.openclaw/subagents/runs.json` → find the `.jsonl` in `~/.openclaw/agents/main/sessions/` with the closest matching timestamp (it'll contain "Subagent Context" near the top).
-
-### How to detect trigger
-
-Scan the session log's assistant messages for `message.content[]` blocks:
-```json
-{"type": "toolCall", "name": "read", "arguments": {"path": ".../<skill-name>/SKILL.md"}}
-```
-Match on `path` (or `file`) containing `/<skill-name>/SKILL.md`. If detected → triggered.

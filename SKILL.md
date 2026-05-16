@@ -13,9 +13,11 @@ The flow:
 2. Write a draft of the skill.
 3. **Ask the user if they want evals** — get explicit consent.
 4. If yes: propose test cases, run with-skill and baseline, grade via `agents/grader.md`, aggregate via `scripts.aggregate_benchmark`, present results.
-5. Iterate until satisfied.
-6. **Ask the user whether to optimize the description** — get explicit consent (agent-driven loop — see `references/description-optimization.md`).
+5. Iterate. At the end of each round, ask the user via `ask_user_question`: *continue improving* or *move on to the next step*. Do NOT mention packaging at this point.
+6. **Ask the user whether to optimize the description** — get explicit consent. Mandatory gate.
 7. **Package the skill** — always execute.
+
+Your TODO plan should mirror this workflow with one task per phase — at minimum: capture intent, draft SKILL.md, eval consent, run & grade evals, iterate, description-optimization consent, package. Do not collapse evaluation and iteration into a single "run evals or package" task; they are distinct phases with their own checkpoints.
 
 **Hard rules — violating any of these is a bug:**
 1. Don't write before talking to the user.
@@ -27,6 +29,7 @@ The flow:
 Self-check at every checkpoint: if you're about to move past one of these without the explicit confirmation or artifact, **stop and go back**.
 
 ---
+
 ## Skill anatomy
 
 ```text
@@ -93,7 +96,7 @@ After drafting, stop and ask:
 
 > "The skill draft is ready. Would you like me to run evaluations to test it?"
 
-- **No** → skip to Step 6.
+- **No** → skip to Step 6 (Step 5 is bypassed since there are no eval results to iterate on).
 - **Yes** → propose 2–3 realistic test prompts, each with objectively verifiable expectations. Present prompts and expectations together:
 
 > "Here are a few test cases and the expectations I'll grade them on. Do these look right?"
@@ -107,7 +110,7 @@ Save to `evals/evals.json` (schema in `references/schemas.md`). Test types worth
 Every test case needs **both** a with-skill run and a baseline (no-skill for new skills, old-skill snapshot for improvements). Never fabricate. Results go in `<skill-name>-workspace/iteration-<N>/eval-<N>/`.
 
 **Subagent execution rules:**
-- **Always pass the workspace path explicitly.** Subagents do not inherit your system prompt and therefore don't know the workspace — state it at the top of the prompt (e.g. `"Workspace: /abs/path/to/workspace. All file reads/writes must stay inside it."`) and use absolute paths for every input/output you reference. The same applies to any subagent you spawn outside the eval flow (grader, comparator, analyzer, description-optimization runs).
+- **Always pass the workspace path explicitly.** Subagents do not inherit your system prompt and therefore don't know the workspace — state it at the top of the prompt (e.g. `"Workspace: /abs/path/to/workspace. All file reads/writes must stay inside it."`) and use absolute paths for every input/output you reference. The same applies to any subagent you spawn outside the eval flow (grader, description-optimization runs).
 - Include in the prompt: *"You are running non-interactively — no human will provide stdin. Feed expected inputs via heredoc/pipe. Never leave a command waiting for stdin."*
 - Prefer isolated subagents for runs; only fork (inherit parent context) when the subtask genuinely needs the full conversation.
 
@@ -140,6 +143,8 @@ Process each test case sequentially and completely.
 
 If a run fails: diagnose and retry. Do not proceed with missing runs.
 
+**Parallel execution:** you may fan out all runs in parallel (e.g. 6 subagents at once for 3 cases × 2 configs) — but each task notification carries its own `total_tokens` / `duration_ms`, and **every per-task timing must be written to its run's `timing.json` before grading or aggregation starts**. The common failure mode is collecting only one aggregate number and losing the per-run breakdown — once the notifications are gone, the data is gone. If you can't reliably attribute each notification back to its run directory, run them serially instead.
+
 ### 4b: Grade, aggregate, present
 
 Hard checkpoint — you may not present results until every run has `grading.json` and `benchmark.md` exists.
@@ -150,10 +155,10 @@ Hard checkpoint — you may not present results until every run has `grading.jso
    cd ~/.openclaw/workspace/skills/skill-creator && python3 -m scripts.aggregate_benchmark <workspace>/iteration-N --skill-name <name>
    ```
    Produces `benchmark.json` and `benchmark.md`. Confirm both exist.
-3. **Analyze** per `agents/analyzer.md` — surface patterns from `benchmark.md`.
-4. **Present** per test case: prompt, with-skill vs baseline (pass rates, timing, tokens), key excerpts, deltas, `eval_feedback`. Ask "Any feedback?" each time. Finish with the overall summary.
+3. **Surface patterns** from `benchmark.md` — which expectations failed, where variance is high, what the skill cost in time/tokens.
+4. **Present** per test case. Show the user everything in `benchmark.md` — **time and tokens are mandatory columns, not optional**. Pass-rate-only summaries are a bug. Ask "Any feedback?" each time. Finish with the overall summary from `benchmark.md`.
 
-Self-check before presenting: (a) every run dir has `grading.json`, (b) `benchmark.md` exists, (c) you're showing graded scores, not your own judgment. If any are false, go back.
+Self-check before presenting: (a) every run dir has `grading.json`, (b) `benchmark.md` exists, (c) you're showing graded scores, not your own judgment, (d) time and tokens are visible for every case. If any are false, go back.
 
 ---
 
@@ -163,22 +168,27 @@ Self-check before presenting: (a) every run dir has `grading.json`, (b) `benchma
 2. Generalize — avoid narrow fixes that only pass the tested examples.
 3. Explain the *why* — don't just add rules.
 4. Bundle repeated work — if every run wrote the same helper, lift it into `scripts/`.
-5. Apply changes, rerun into `iteration-<N+1>/`, repeat until the user is satisfied or feedback dries up.
+5. Apply changes and rerun into `iteration-<N+1>/`.
+
+**Exit question (mandatory after every round):** use `ask_user_question` with exactly two options. Do NOT mention packaging — that is Step 7's concern, not this fork's.
+
+1. **Continue improving** — go back to substep 5.
+2. **Move on to the next step** — exit Step 5 and enter Step 6.
 
 ---
 
 ## Step 6: Description optimization
 
-After the skill works (and evals if any), stop and ask:
+**Mandatory consent gate** — runs immediately after exiting Step 5 (or after the user declines evals in Step 3). Use `ask_user_question`:
 
 > "Would you like me to optimize the skill's description for better triggering accuracy?"
 
-- **Yes** → **read `references/description-optimization.md` now, before anything else.** It contains the full protocol — query generation, review, agent-driven eval loop, trigger detection, scoring. Don't improvise from memory.
+- **Yes** → **read `references/description-optimization.md` now, before anything else.** It contains the full protocol — query generation, review, agent-driven eval loop, trigger detection, scoring. Don't improvise from memory. When the protocol finishes, continue to packaging.
 - **No** → continue to packaging.
 
 ---
 
-## Step 7: Packaging (always execute)
+## Step 7: Packaging 
 
 Run:
 
@@ -192,27 +202,8 @@ Self-check before ending the conversation: did `scripts.package_skill` run? If n
 
 ---
 
-## Platform-specific commands
-
-Use the command syntax that matches the current platform. The dangerous trap:
-
-**Windows `mkdir` does NOT support `-p`.** `mkdir -p folder` creates a directory literally named `-p`. For nested dirs use PowerShell `New-Item -ItemType Directory -Path "parent/child" -Force` or `mkdir parent && mkdir parent\child` in cmd.
-
-| Operation | Windows | Linux/macOS |
-|-----------|---------|-------------|
-| Create dir | `mkdir folder` / `New-Item -ItemType Directory -Path folder` | `mkdir -p folder` |
-| Read file | `type file.txt` / `Get-Content file.txt` | `cat file.txt` |
-| List | `dir` / `Get-ChildItem` | `ls -la` |
-| Delete file | `del file.txt` / `Remove-Item file.txt` | `rm file.txt` |
-| Delete dir | `rmdir folder` / `Remove-Item -Recurse folder` | `rm -rf folder` |
-| Recursive find | `dir /s pattern` / `Get-ChildItem -Recurse -Filter pattern` | `find . -name pattern` |
-
----
-
 ## Reference files
 
 - `agents/grader.md` — grading expectations against outputs
-- `agents/comparator.md` — blind A/B comparison
-- `agents/analyzer.md` — analyzing benchmark results
 - `references/description-optimization.md` — full description optimization process
 - `references/schemas.md` — JSON schemas for evals.json, grading.json, etc.
