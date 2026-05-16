@@ -7,89 +7,115 @@ description: Create new skills, modify and improve existing skills, and measure 
 
 A skill for creating new skills and iteratively improving them.
 
-The process looks like this:
+The flow:
 
-- **Talk to the user first** — understand what they want before writing anything
-- Write a draft of the skill
-- **Ask the user if they want evals** — get explicit consent
-- If yes: propose test cases, run both with-skill and without-skill, grade via `agents/grader.md`, aggregate via `scripts/aggregate_benchmark`, present benchmark report
-- Iterate until satisfied
-- Optionally optimize description (agent-driven loop — see D3 below)
-- **Ask the user whether to optimize the description** — get explicit consent (agent-driven loop — see Description Optimization below)
-- **Package the skill** — always execute, no exceptions
+1. **Talk to the user first** — understand what they want before writing anything.
+2. Write a draft of the skill.
+3. **Ask the user if they want evals** — get explicit consent.
+4. If yes: propose test cases, run with-skill and baseline, grade via `agents/grader.md`, aggregate via `scripts.aggregate_benchmark`, present results.
+5. Iterate until satisfied.
+6. **Ask the user whether to optimize the description** — get explicit consent (agent-driven loop — see `references/description-optimization.md`).
+7. **Package the skill** — always execute.
 
-**Common failure modes (hard rules — violating any of these is a bug):**
-1. **Writing without talking to the user first** — Step 1 is not optional.
-2. **Skipping the eval consent question** — After drafting the skill you MUST ask "Would you like me to run evaluations?" and wait for an answer. This is the single most frequently skipped step.
-3. **Skipping grading/aggregation or doing it manually** — After runs complete, you MUST grade every run via `agents/grader.md` and aggregate via `scripts.aggregate_benchmark`. This is the most commonly skipped substep. If you find yourself presenting results without `grading.json` files and a `benchmark.md`, STOP — you skipped grading. Go back and do it.
-4. **Skipping the description optimization consent question** — Before finishing, you MUST explicitly ask "Would you like me to optimize the description?" and wait for an answer. Do not silently skip this.
-5. **Skipping packaging** — The packaging step is MANDATORY and must always run at the end. Do not treat it as conditional or optional. If you are about to end the conversation without having run `scripts.package_skill`, STOP — you skipped packaging.
+**Hard rules — violating any of these is a bug:**
+1. Don't write before talking to the user.
+2. Don't skip the eval consent question (Step 3).
+3. Don't skip grading/aggregation — runs without `grading.json` and `benchmark.md` are worthless.
+4. Don't skip the description optimization consent question (Step 6).
+5. Don't skip packaging (Step 7).
+
+Self-check at every checkpoint: if you're about to move past one of these without the explicit confirmation or artifact, **stop and go back**.
+
+---
+## Skill anatomy
+
+```text
+skill-name/
+├── SKILL.md       required — YAML frontmatter + instructions
+├── scripts/       optional — deterministic or repeated operations
+├── references/    optional — load-on-demand domain docs, schemas, API details
+└── assets/        optional — templates, icons, fonts used in outputs
+```
+
+### Frontmatter — hard constraints
+
+```yaml
+---
+name: skill-name-here
+description: Imperative description of when to trigger and what to do.
+---
+```
+
+- `name`: kebab-case, lowercase letters / digits / hyphens only, ≤ 30 chars.
+- `description`: ≤ 1024 chars. This is the **only triggering mechanism** — all "when to use" guidance goes here, not the body. Make it slightly pushy: instead of `"Builds dashboards for internal data"`, write `"Builds dashboards for internal data. Use whenever the user mentions dashboards, metrics, or wants to display company data — even if they don't say 'dashboard' explicitly."`
+- Allowed keys only: `name`, `description`, `license`, `allowed-tools`, `metadata`, `compatibility`. No duplicates.
+
+### Progressive disclosure
+
+- Metadata (name + description) is always in context — keep it lean and trigger-accurate.
+- Body is loaded on trigger — keep it under ~300 lines.
+- Large reference material (API specs, schemas, variant docs) lives in `references/` and is read on demand. For multi-domain skills, split by variant (`aws.md`, `gcp.md`, …).
+- Repeated, deterministic, error-prone operations belong in `scripts/`.
+
+### Writing principles
+
+- Imperative form. No "this skill will…".
+- Give the model a mental model and judgment criteria, not a script.
+- Include examples where they clarify behavior.
+
 ---
 
-## Step 1: Capture intent (do NOT skip)
+## Step 1: Capture intent
 
-**Before writing anything**, talk to the user. Extract what you can from the conversation — tools used, steps taken, corrections made — then fill in gaps by asking:
+Before writing anything, extract what you can from the conversation — tools used, steps taken, corrections made — then fill gaps:
 
 1. What should this skill do? When should it trigger?
 2. What's the expected output?
-3. Edge cases, input formats, or dependencies?
+3. Edge cases, input formats, dependencies?
 
-Surface things the user might not have considered: failure modes, what "done" looks like. Research similar skills/patterns if helpful. Only move to writing once aligned.
+Surface things the user might not have considered: failure modes, what "done" looks like. Research similar skills if useful. Only move on once aligned.
 
 ---
 
 ## Step 2: Write the SKILL.md
 
-Components:
+Follow the anatomy and frontmatter rules above. Self-check before moving on:
 
-- **name**: Skill identifier
-- **description**: When to trigger and what it does. This is the primary triggering mechanism — all "when to use" guidance goes here, not in the body. Make it slightly "pushy": instead of "Builds dashboards for internal data", write "Builds dashboards for internal data. Use whenever the user mentions dashboards, metrics, or wants to display company data — even if they don't say 'dashboard' explicitly."
-- **the rest of the skill**
-
-Key principles:
-- Explain *why* behind instructions — LLMs generalize better with intent.
-- Keep it lean. Under 300 lines. Move supplementary reference material to `references/`.
-- Use imperative form. Include examples where helpful.
-- When a skill supports multiple domains, organize by variant in `references/` (e.g. `aws.md`, `gcp.md`).
+- `SKILL.md` exists with valid frontmatter (kebab-case name ≤ 30, description ≤ 1024, allowed keys only).
+- Body is under 300 lines; bulky reference material moved to `references/`.
+- No stray files outside the skill folder.
 
 ---
 
-## Step 3: Ask about evaluation, then propose test cases (do NOT skip)
+## Step 3: Ask about evals, then propose test cases
 
-**MANDATORY CHECKPOINT — DO NOT SKIP THIS STEP.**
-
-After drafting the skill, you MUST stop and explicitly ask the user whether they want to run evals. Do not assume yes. Do not assume no. Do not silently move on. You must wait for an answer before proceeding.
-
-Ask exactly this (or equivalent):
+After drafting, stop and ask:
 
 > "The skill draft is ready. Would you like me to run evaluations to test it?"
 
-- **Yes**: proceed to propose test cases and run them (Steps 3a–4).
-- **No**: skip to Step 5 (or Description Optimization). Do not run evals silently.
+- **No** → skip to Step 6.
+- **Yes** → propose 2–3 realistic test prompts, each with objectively verifiable expectations. Present prompts and expectations together:
 
-**If you find yourself moving to Step 5 without having asked this question, STOP — you skipped this step. Go back and ask.**
+> "Here are a few test cases and the expectations I'll grade them on. Do these look right?"
 
-### Step 3a: Propose test cases
-
-Propose 2–3 realistic test prompts. For each test case, also draft expectations — objectively verifiable success criteria with clear names. Present prompts and expectations together to the user and wait for confirmation before running:
-
-> "Here are a few test cases and the expectations I'll grade them on. Do these look right, or do you want to change any?"
-
-Save to `evals/evals.json` (see `references/schemas.md` for full schema including `expectations`).
+Save to `evals/evals.json` (schema in `references/schemas.md`). Test types worth covering: `smoke` (minimal input works), `happy_path` (real user flow), `edge_case` (boundary/error input), `integration` (multi-step end-to-end).
 
 ---
 
 ## Step 4: Run the evals
 
-Complete every substep (4a–4b) before moving on. Every test case needs **both** a with-skill run and a baseline run (without-skill for new skills, old-skill for existing skill improvements) from actual subagent execution. Never fabricate results. Never present results without running the grader and aggregate script. **Runs without grading are worthless — Step 4b is not optional.**
+Every test case needs **both** a with-skill run and a baseline (no-skill for new skills, old-skill snapshot for improvements). Never fabricate. Results go in `<skill-name>-workspace/iteration-<N>/eval-<N>/`.
 
-Results go in `<skill-name>-workspace/iteration-<N>/eval-<N>/`.
+**Subagent execution rules:**
+- **Always pass the workspace path explicitly.** Subagents do not inherit your system prompt and therefore don't know the workspace — state it at the top of the prompt (e.g. `"Workspace: /abs/path/to/workspace. All file reads/writes must stay inside it."`) and use absolute paths for every input/output you reference. The same applies to any subagent you spawn outside the eval flow (grader, comparator, analyzer, description-optimization runs).
+- Include in the prompt: *"You are running non-interactively — no human will provide stdin. Feed expected inputs via heredoc/pipe. Never leave a command waiting for stdin."*
+- Prefer isolated subagents for runs; only fork (inherit parent context) when the subtask genuinely needs the full conversation.
 
-### 4a: For each test case — write metadata, run both configs, capture timing
+### 4a: Per test case — write metadata, run both configs, capture timing
 
-Process each test case **sequentially and completely** before moving to the next. For each test case:
+Process each test case sequentially and completely.
 
-**1. Write `eval_metadata.json`** in the eval directory (`eval-<N>/eval_metadata.json`). Copy the expectations confirmed in Step 3a — do not re-draft, use what the user already approved. Ensure `evals/evals.json` is also up to date.
+**1.** Write `eval_metadata.json` (`eval-<N>/eval_metadata.json`). Copy the expectations the user already approved — do not re-draft.
 ```json
 {
   "eval_id": 0,
@@ -99,95 +125,94 @@ Process each test case **sequentially and completely** before moving to the next
 }
 ```
 
-**2. Run with-skill subagent.** Provide the skill path, task prompt, input files, and output directory (`with_skill/outputs/`). Include in the prompt: "You are running non-interactively — no human will provide stdin. Feed expected inputs via heredoc/pipe. Never leave a command waiting for stdin."
+**2.** Run with-skill subagent. Pass skill path, task prompt, input files, output dir (`with_skill/outputs/`).
 
-**3. IMMEDIATELY save `with_skill/timing.json`.** Do this the moment the subagent finishes — this data cannot be recovered later. Do NOT defer this to a later step.
+**3.** **Immediately** save `with_skill/timing.json`. This data cannot be recovered later.
 ```json
-{
-  "total_tokens": 84852,
-  "duration_ms": 23332,
-  "total_duration_seconds": 23.3
-}
+{ "total_tokens": 84852, "duration_ms": 23332, "total_duration_seconds": 23.3 }
 ```
 
-**4. Run baseline subagent.** The baseline depends on the scenario:
-- **New skill**: Run the same prompt *without* the skill path. Save to `without_skill/outputs/`.
-- **Improving an existing skill**: Snapshot the old skill first (copy to a temp location), then run the baseline subagent *with the old skill snapshot*. Save to `old_skill/outputs/`. Do NOT run a no-skill baseline — the comparison must be old version vs new version.
+**4.** Run baseline subagent:
+- **New skill:** same prompt without the skill path → `without_skill/outputs/`.
+- **Improving a skill:** snapshot the old skill first, run with the snapshot → `old_skill/outputs/`. Do NOT run a no-skill baseline — compare old vs new.
 
-**5. IMMEDIATELY save baseline `timing.json`** (in `without_skill/` or `old_skill/` depending on scenario). Same rule — capture it right now, not later.
+**5.** **Immediately** save the baseline `timing.json`.
 
-If a run fails: diagnose and retry. Do not proceed to grading with missing runs.
+If a run fails: diagnose and retry. Do not proceed with missing runs.
 
-### 4b: Grade, aggregate, and present — MANDATORY, DO NOT SKIP
+### 4b: Grade, aggregate, present
 
-**THIS IS A HARD CHECKPOINT.** You may NOT present results, move to Step 5, or claim the eval is complete until every run has a `grading.json` and `benchmark.md` exists. If you are about to summarize eval results without having graded, STOP — you are skipping grading.
+Hard checkpoint — you may not present results until every run has `grading.json` and `benchmark.md` exists.
 
-Complete all substeps below before moving on.
+1. **Grade each run** via grader subagent (serial). The prompt must tell the subagent to **read `agents/grader.md` first and follow it exactly**. Pass expectations from `eval_metadata.json`, transcript path, outputs dir. Output: `grading.json` per run (schema in `references/schemas.md`).
+2. **Aggregate:**
+   ```bash
+   cd ~/.openclaw/workspace/skills/skill-creator && python3 -m scripts.aggregate_benchmark <workspace>/iteration-N --skill-name <name>
+   ```
+   Produces `benchmark.json` and `benchmark.md`. Confirm both exist.
+3. **Analyze** per `agents/analyzer.md` — surface patterns from `benchmark.md`.
+4. **Present** per test case: prompt, with-skill vs baseline (pass rates, timing, tokens), key excerpts, deltas, `eval_feedback`. Ask "Any feedback?" each time. Finish with the overall summary.
 
-**1. Grade each run via grader subagent (serial, one at a time) — NO EXCEPTIONS:**
-The grader prompt must instruct the subagent to **read `agents/grader.md` first and follow it exactly**. Pass it: expectations from `eval_metadata.json`, transcript path, outputs directory. Output: `grading.json` in the run directory (schema in `references/schemas.md`). **Wait until every run has a valid `grading.json`. Do not proceed without them.**
-
-**2. Aggregate via script (mandatory — no manual substitute):**
-```bash
-cd ~/.openclaw/workspace/skills/skill-creator && python3 -m scripts.aggregate_benchmark <workspace>/iteration-N --skill-name <name>
-```
-Produces `benchmark.json` and `benchmark.md`. **Verify both files exist before proceeding.** If either is missing, the eval is incomplete.
-
-**3. Analyst pass:** Read `benchmark.md`, surface patterns per `agents/analyzer.md`.
-
-**4. Present results:** Walk through each test case: prompt, with-skill vs. baseline comparison (pass rates, timing, tokens), key excerpts, deltas, `eval_feedback`. Ask "Any feedback?" per case. Show overall summary from `benchmark.md` at the end.
-
-**Self-check before presenting:** Confirm that (a) every run directory contains `grading.json`, (b) `benchmark.md` exists, (c) you are presenting graded scores, not your own assessment. If any of these are false, go back and fix it.
+Self-check before presenting: (a) every run dir has `grading.json`, (b) `benchmark.md` exists, (c) you're showing graded scores, not your own judgment. If any are false, go back.
 
 ---
 
 ## Step 5: Improve and iterate
 
-1. **Read the transcripts**, not just final outputs. Trim unproductive steps the skill caused.
-2. **Generalize** — avoid narrow fixes that only work for tested examples.
-3. **Explain the why** — don't just add rules; explain why they matter.
-4. **Bundle repeated work** — if all runs wrote the same helper, put it in `scripts/`.
-5. Apply improvements, rerun into `iteration-<N+1>/`, repeat until the user is satisfied or feedback is empty.
-
-## Description Optimization (do NOT skip the ask)
-
-After the skill is finished (and after evals if they ran), you MUST stop and explicitly ask the user whether they want to optimize the description. Do not assume yes. Do not assume no. Do not silently move on to packaging. You must wait for an answer before proceeding.
-
-Ask exactly this (or equivalent):
-
-> "Would you like me to optimize the skill's description for better triggering accuracy?"
-
-- **Yes**: **Read `references/description-optimization.md` NOW before doing anything else.** That file contains the complete protocol — query generation, review, the agent-driven eval loop, trigger detection, and scoring. Do NOT proceed from memory or improvise. Read it, then follow it step by step.
-- **No**: proceed to Packaging.
-
-**If you find yourself moving to Packaging without having asked this question, STOP — you skipped this step. Go back and ask.**
+1. Read **transcripts**, not just final outputs — trim unproductive steps the skill caused.
+2. Generalize — avoid narrow fixes that only pass the tested examples.
+3. Explain the *why* — don't just add rules.
+4. Bundle repeated work — if every run wrote the same helper, lift it into `scripts/`.
+5. Apply changes, rerun into `iteration-<N+1>/`, repeat until the user is satisfied or feedback dries up.
 
 ---
 
-## Packaging (MANDATORY — always execute)
+## Step 6: Description optimization
 
-**THIS STEP IS NOT OPTIONAL.**  Package the skill. Run:
+After the skill works (and evals if any), stop and ask:
+
+> "Would you like me to optimize the skill's description for better triggering accuracy?"
+
+- **Yes** → **read `references/description-optimization.md` now, before anything else.** It contains the full protocol — query generation, review, agent-driven eval loop, trigger detection, scoring. Don't improvise from memory.
+- **No** → continue to packaging.
+
+---
+
+## Step 7: Packaging (always execute)
+
+Run:
 
 ```bash
 python3 -m scripts.package_skill <path/to/skill-folder>
 ```
 
-If you have access to the `present_files` tool, also present the packaged output to the user.
+If you have access to `present_files`, also present the packaged output.
+
+Self-check before ending the conversation: did `scripts.package_skill` run? If not, run it now.
+
 ---
 
-## OpenClaw-Specific Notes
+## Platform-specific commands
 
-OpenClaw loads skills from `~/.openclaw/workspace/skills/`. Newly installed skills are available in the next conversation turn.
+Use the command syntax that matches the current platform. The dangerous trap:
 
-- **Description optimization**: You drive the loop directly by spawning subagents, checking session logs for trigger detection, and cancelling early. No external scripts needed.
-- **Updating an existing skill**: Preserve the original directory name and `name` frontmatter. Copy to `/tmp/skill-name/` before editing if the installed path is read-only.
+**Windows `mkdir` does NOT support `-p`.** `mkdir -p folder` creates a directory literally named `-p`. For nested dirs use PowerShell `New-Item -ItemType Directory -Path "parent/child" -Force` or `mkdir parent && mkdir parent\child` in cmd.
+
+| Operation | Windows | Linux/macOS |
+|-----------|---------|-------------|
+| Create dir | `mkdir folder` / `New-Item -ItemType Directory -Path folder` | `mkdir -p folder` |
+| Read file | `type file.txt` / `Get-Content file.txt` | `cat file.txt` |
+| List | `dir` / `Get-ChildItem` | `ls -la` |
+| Delete file | `del file.txt` / `Remove-Item file.txt` | `rm file.txt` |
+| Delete dir | `rmdir folder` / `Remove-Item -Recurse folder` | `rm -rf folder` |
+| Recursive find | `dir /s pattern` / `Get-ChildItem -Recurse -Filter pattern` | `find . -name pattern` |
 
 ---
 
 ## Reference files
 
-- `agents/grader.md` — Grading expectations against outputs
-- `agents/comparator.md` — Blind A/B comparison
-- `agents/analyzer.md` — Analyzing benchmark results
-- `references/description-optimization.md` — Full description optimization process
+- `agents/grader.md` — grading expectations against outputs
+- `agents/comparator.md` — blind A/B comparison
+- `agents/analyzer.md` — analyzing benchmark results
+- `references/description-optimization.md` — full description optimization process
 - `references/schemas.md` — JSON schemas for evals.json, grading.json, etc.
