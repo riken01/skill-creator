@@ -66,18 +66,13 @@ Apply edits, confirm again if changed. Save final set as JSON. **Do NOT skip thi
 
 **A. Patch.** Rewrite ONLY the `description:` field in `<skill-path>/SKILL.md` to `current_description`. Leave `name:` and the body untouched.
 
-**B. Run all 8 queries.** For each:
-1. Spawn a fresh subagent with the raw query as the task, prefixed with the user's working directory. Do NOT mention the skill — that defeats trigger detection. Append a fixed reporting instruction to every query (verbatim):
+**B. Run all 8 queries as routing probes.** Trigger detection is a routing question — don't let the subagent execute the task. Spawn each with this prompt:
 
-   > *"When you finish the task, end your reply with a single line in this exact format and nothing after it:* `SKILLS_USED: <comma-separated skill names, or 'none'>` *. List every skill you actually loaded or invoked. Do not list skills you only considered."*
+> *"User just typed: <query>. Do NOT execute, plan, or use tools. Reply with one line only: `SKILLS_USED: <skill names, or 'none'>` — listing skills you would actually load."*
 
-2. Wait for the subagent to finish, then parse its final reply for the `SKILLS_USED:` line.
-   - `<skill-name>` appears in the list → `triggered: true`.
-   - `none` (or the skill is absent) → `triggered: false`.
-   - Line missing or malformed → re-run that query once; if still missing, log `triggered: null` and treat as a failure for that query.
-3. `pass = (should_trigger == triggered)`.
+Parse the reply: `<skill-name>` in the list → `triggered: true`; otherwise `false`. Malformed/missing → re-run once, then log `null` and count as fail.
 
-This replaces the older "watch the session log for a `read` toolCall" approach — log-scanning was unreliable across subagent backends. Asking the subagent to self-report is the contract that travels.
+`pass = (should_trigger == triggered)`.
 
 **C. Score.** With TP/TN/FP/FN over the 8 results:
 - `passed / 8`
