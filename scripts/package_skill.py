@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Skill Packager - Creates a distributable .skill file of a skill folder
+Skill Packager - Creates a distributable .zip file of a skill folder
 
 Usage:
     python utils/package_skill.py <path/to/skill-folder> [output-directory]
@@ -41,14 +41,14 @@ def should_exclude(rel_path: Path) -> bool:
 
 def package_skill(skill_path, output_dir=None):
     """
-    Package a skill folder into a .skill file.
+    Package a skill folder into a .zip file.
 
     Args:
         skill_path: Path to the skill folder
-        output_dir: Optional output directory for the .skill file (defaults to current directory)
+        output_dir: Optional output directory for the .zip file (defaults to current directory)
 
     Returns:
-        Path to the created .skill file, or None if error
+        Path to the created .zip file, or None if error
     """
     skill_path = Path(skill_path).resolve()
 
@@ -84,9 +84,9 @@ def package_skill(skill_path, output_dir=None):
     else:
         output_path = Path.cwd()
 
-    skill_filename = output_path / f"{skill_name}.skill"
+    skill_filename = output_path / f"{skill_name}.zip"
 
-    # Create the .skill file (zip format)
+    # Create the .zip file (zip format)
     try:
         with zipfile.ZipFile(skill_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
             # Walk through the skill directory, excluding build artifacts
@@ -104,7 +104,7 @@ def package_skill(skill_path, output_dir=None):
         return skill_filename
 
     except Exception as e:
-        print(f"❌ Error creating .skill file: {e}")
+        print(f"❌ Error creating .zip file: {e}")
         return None
 
 

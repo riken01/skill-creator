@@ -1,12 +1,12 @@
-## Description Optimization — Complete Protocol
+## Description Optimization — Protocol
 
-The description field in SKILL.md frontmatter is the primary mechanism that determines whether the agent invokes a skill. This document contains the full protocol for optimizing it. Follow every step in order.
+The description field in SKILL.md frontmatter is what triggers the skill. Follow every step.
 
 ---
 
-### Step 1: Generate 12 trigger eval queries
+### Step 1: Generate 8 eval queries (4 positive, 4 negative)
 
-Create 12 eval queries — 6 should-trigger and 6 should-not-trigger. Save as JSON:
+Save as `<workspace>/trigger_eval.json`:
 
 ```json
 [
@@ -15,149 +15,127 @@ Create 12 eval queries — 6 should-trigger and 6 should-not-trigger. Save as JS
 ]
 ```
 
-The queries must be realistic and something an OpenClaw user would actually type. Not abstract requests, but requests that are concrete and specific and have a good amount of detail. For instance, file paths, personal context about the user's job or situation, column names and values, company names, URLs. A little bit of backstory. Some might be in lowercase or contain abbreviations or typos or casual speech. Use a mix of different lengths, and focus on edge cases rather than making them clear-cut (the user will get a chance to sign off on them).
+Queries must be realistic — what an OpenClaw user would actually type. Include file paths, personal context, column names, company names, URLs, a little backstory. Mix lengths; some casual/lowercase/typos. Focus on edge cases, not clear-cut requests.
 
-Bad: `"Format this data"`, `"Extract text from PDF"`, `"Create a chart"`
+Bad: `"Format this data"`, `"Extract text from PDF"`
 
 Good: `"ok so my boss just sent me this xlsx file (its in my downloads, called something like 'Q4 sales final FINAL v2.xlsx') and she wants me to add a column that shows the profit margin as a percentage. The revenue is in column C and costs are in column D i think"`
 
-For the **should-trigger** queries (6), think about coverage. You want different phrasings of the same intent — some formal, some casual. Include cases where the user doesn't explicitly name the skill or file type but clearly needs it. Throw in some uncommon use cases and cases where this skill competes with another but should win.
+**Positives (4):** different phrasings of the same intent — some formal, some casual. Include cases where the user doesn't explicitly name the skill or file type but clearly needs it. Throw in uncommon cases and competing-skill scenarios where this one should win.
 
-For the **should-not-trigger** queries (6), the most valuable ones are the near-misses — queries that share keywords or concepts with the skill but actually need something different. Think adjacent domains, ambiguous phrasing where a naive keyword match would trigger but shouldn't, and cases where the query touches on something the skill does but in a context where another tool is more appropriate.
+**Negatives (4):** near-misses are most valuable — share keywords or concepts with the skill but actually need something else. Adjacent domains, ambiguous phrasing where naive keyword match would trigger. Avoid obviously irrelevant queries (`"write a fibonacci function"` as a PDF skill negative is useless — it tests nothing).
 
-The key thing to avoid: don't make should-not-trigger queries obviously irrelevant. "Write a fibonacci function" as a negative test for a PDF skill is too easy — it doesn't test anything. The negative cases should be genuinely tricky.
-
----
-
-### Step 2: Review with user
-
-Present the eval set to the user conversationally for review:
-
-1. Show the eval queries in a clear format, grouped by category:
-
-   **Should trigger (6 queries):**
-   1. `"ok so my boss just sent me this xlsx file..."` ✅
-   2. `"another query..."` ✅
-   ...
-
-   **Should NOT trigger (6 queries):**
-   1. `"some near-miss query..."` ❌
-   2. `"another query..."` ❌
-   ...
-
-2. Ask the user to review:
-   - Are any should-trigger queries wrong? (should actually be negative)
-   - Are any should-not-trigger queries wrong? (should actually be positive)
-   - Any queries to add, remove, or rephrase?
-   - Does the overall coverage look good?
-
-3. Apply the user's edits and confirm the final eval set. If the user suggests changes, show the updated list and confirm again.
-
-4. Once confirmed, save the final eval set as a JSON file (e.g., `<workspace>/trigger_eval.json`).
-
-This step matters — bad eval queries lead to bad descriptions.
+With only 8 queries, every one must pull weight.
 
 ---
 
-### Step 3: Run the optimization loop (agent-driven)
+### Step 2: Review with user (MUST wait for confirmation)
 
-You drive the loop directly. For each iteration, test every query by spawning a subagent, checking if it reads the temp skill, and cancelling early when triggered.
+Present queries grouped:
 
-#### Setup
+**Should trigger (4):**
+1. `"..."` ✅
+2. ...
 
-1. **Split eval set:** 60% train, 40% test (stratified by should_trigger). Use a fixed seed for reproducibility.
-2. **Create results workspace:** `<workspace>/description-optimization/`
-3. **Set** `current_description` = skill's current description from frontmatter.
+**Should NOT trigger (4):**
+1. `"..."` ❌
+2. ...
 
-#### For each iteration (1 to 5):
+Ask:
+- Any should-trigger queries that should actually be negative?
+- Any should-not-trigger that should actually be positive?
+- Anything to add, remove, or rephrase?
+- Does coverage look good?
 
-**A. Evaluate all queries**
+Apply edits, confirm again if changed. Save final set as JSON. **Do NOT skip this — bad eval queries produce bad descriptions and waste the whole loop.**
 
-For each query in `train_set + test_set`:
+---
 
-1. **Create temp skill:** Write a temporary `SKILL.md` at `~/.openclaw/workspace/skills/_eval-<skill-name>-<random-8-hex>/SKILL.md` with:
-   ```yaml
-   ---
-   name: _eval-<skill-name>-<hex>
-   description: |
-     <current_description>
-   ---
-   # _eval-<skill-name>-<hex>
-   This skill handles: <current_description>
-   ```
+### Step 3: Optimization loop (agent-driven)
 
-2. **Spawn subagent** with the raw query as the task. Note the `runId` returned by `sessions_spawn`.
+**Key principle:** patch the installed skill's description in place each iteration so the subagent sees exactly one description (the candidate). Do NOT create a `_eval-<name>-<hex>` twin — when both exist the agent can read either and the trigger signal is muddied.
 
-3. **Monitor for trigger:** While the subagent is running, check its session log for a `read` toolCall targeting the temp skill. See "How to find the session log" and "How to detect trigger" below.
-   - **If triggered** (read detected): Cancel the subagent immediately. Record `triggered: true`.
-   - **If subagent completes** without triggering: Record `triggered: false`.
+#### Setup (run once)
 
-4. **Cleanup:** Delete the temp skill directory.
+1. **Backup:** `cp <skill-path>/SKILL.md <skill-path>/SKILL.md.bak-<random-8-hex>`. Record the backup path.
+2. **Restore-guard mindset:** treat the rest as `try { ... } finally { restore }`. **Teardown MUST run on every exit path** — success, max-iterations, error, interrupt. Leaving the skill half-edited corrupts the user's installed environment.
+3. **Create workspace:** `<workspace>/description-optimization/`.
+4. `current_description` = the original description from the snapshotted SKILL.md.
 
-5. **Record result:** `{query, should_trigger, triggered, pass}` where `pass = (should_trigger == triggered)`.
+#### For each iteration (1 to 3)
 
-**B. Compute scores**
+**A. Patch.** Rewrite ONLY the `description:` field in `<skill-path>/SKILL.md` to `current_description`. Leave `name:` and the body untouched.
 
-Split results back into train/test by matching queries. Compute for each set:
-- passed / total
-- precision = TP / (TP + FP)
-- recall = TP / (TP + FN)
-- accuracy = (TP + TN) / total
+**B. Run all 8 queries.** For each:
+1. Spawn a fresh subagent with the raw query as the task. Note the `runId`.
+2. Watch the session log for a `read` toolCall whose path contains `/<skill-name>/SKILL.md` (see detection guide below).
+   - Detected → cancel subagent, `triggered: true`.
+   - Subagent finishes without it → `triggered: false`.
+3. `pass = (should_trigger == triggered)`.
 
-**C. Check exit conditions**
+**C. Score.** With TP/TN/FP/FN over the 8 results:
+- `passed / 8`
+- `precision = TP / (TP + FP)`
+- `recall = TP / (TP + FN)`
+- `accuracy = (TP + TN) / 8`
 
-- All train queries pass → exit with "all_passed"
-- Max iterations (5) reached → exit with "max_iterations"
-- Otherwise → continue to D
-
-**D. Improve description**
-
-Analyze **train failures only** (do NOT look at test results — this prevents overfitting). Consider:
-- Which should-trigger queries failed to trigger? Why might the description miss them?
-- Which should-not-trigger queries falsely triggered? What's too broad?
-
-Write a new description (100–200 words, hard limit 1024 chars). Rules:
-- Generalize from failures — don't list specific queries.
-- Try structurally different phrasings each iteration.
-- Use imperative form ("Use this skill for...").
-- Focus on user intent, not implementation details.
-
-Update `current_description` and continue the loop.
-
-**E. Log iteration**
-
-Append to `<workspace>/description-optimization/history.json`:
+**D. Log — MANDATORY, do this BEFORE step E.** Append to `<workspace>/description-optimization/history.json` (a JSON array, one object per iteration):
 ```json
 {
   "iteration": N,
-  "description": "...",
-  "train_passed": X, "train_total": Y,
-  "test_passed": X, "test_total": Y
+  "description": "the full candidate tested this iteration",
+  "passed": X, "total": 8,
+  "precision": 0.0, "recall": 0.0, "accuracy": 0.0,
+  "results": [
+    {"query": "...", "should_trigger": true, "triggered": true, "pass": true}
+  ]
 }
 ```
+Per-query `results` are required — they're the only diagnostic record across iterations. **Writing this before E ensures a crash in the improve step doesn't lose the iteration.**
 
-**After loop:** Select the best iteration by **test score** (or train if no test set).
+**E. Exit checks.** All 8 pass → `all_passed`, exit. Iteration 3 just done → `max_iterations`, exit. Otherwise continue to F.
+
+**F. Improve description.** Look at THIS iteration's failures:
+- Positives that missed: what about the description fails to evoke the skill for these phrasings?
+- Negatives that fired: what's too broad or too keyword-heavy?
+
+Write a new `current_description` (100–200 words, hard limit 1024 chars):
+- Generalize from failures — don't enumerate specific queries.
+- **Structurally different phrasing each iteration.** With only 3 iterations, don't make iteration 2 a small tweak of iteration 1 — diversify aggressively.
+- Imperative form ("Use this skill for...").
+- Focus on user intent, not implementation.
+
+Loop back to A.
+
+#### Teardown — MANDATORY, runs in every exit path
+
+```
+mv <skill-path>/SKILL.md.bak-<hex> <skill-path>/SKILL.md
+```
+
+Use `mv` so the backup vanishes on success — a leftover `.bak-*` file means teardown didn't complete. Verify the restored `description:` matches the original. The skill is now back to its pre-optimization state.
+
+---
+
+### Step 4: Pick winner and apply
+
+**Order matters: teardown FIRST, then present, then apply (only with user approval).**
+
+1. Read `<workspace>/description-optimization/history.json`. Verify it has exactly as many entries as iterations you ran (missing entries = a logging step was skipped — investigate before proceeding).
+2. Rank by: `passed` (higher better) → tie-break `precision` → tie-break `recall` → tie-break earliest `iteration` (prefer simpler/earlier when tied). Top entry's description = `best_description`.
+3. Show the user: original vs. `best_description`, per-iteration scores, exit reason, key observations (which queries flipped between iterations, what patterns failed).
+4. **Approved** → edit `<skill-path>/SKILL.md` and write `best_description` into `description:`. **Declined** → do nothing; teardown already restored the original.
 
 ---
 
 ### How to find the subagent's session log
 
-1. After spawning, note the `runId`.
-2. Read `~/.openclaw/subagents/runs.json` → find the run entry → get `startedAt` timestamp.
-3. In `~/.openclaw/agents/main/sessions/`, find the `.jsonl` file created at the closest timestamp that contains "Subagent Context" in its first few lines.
+Note the `runId` from `sessions_spawn` → look up `startedAt` in `~/.openclaw/subagents/runs.json` → find the `.jsonl` in `~/.openclaw/agents/main/sessions/` with the closest matching timestamp (it'll contain "Subagent Context" near the top).
 
 ### How to detect trigger
 
-Scan the session log for a `read` toolCall in the `message.content` array of any assistant message:
-
+Scan the session log's assistant messages for `message.content[]` blocks:
 ```json
-{"type": "toolCall", "name": "read", "arguments": {"path": ".../_eval-<name>-<hex>/SKILL.md"}}
+{"type": "toolCall", "name": "read", "arguments": {"path": ".../<skill-name>/SKILL.md"}}
 ```
-
-Match on: the `path` (or `file`) argument contains the temp skill name fragment (e.g., `_eval-book-tracker-a1b2c3d4`).
-
----
-
-### Step 4: Present and apply
-
-Show original vs. best description, train/test scores, iteration count, key observations. If user approves, update the skill's SKILL.md frontmatter with `best_description`.
+Match on `path` (or `file`) containing `/<skill-name>/SKILL.md`. If detected → triggered.

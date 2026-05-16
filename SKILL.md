@@ -15,12 +15,15 @@ The process looks like this:
 - If yes: propose test cases, run both with-skill and without-skill, grade via `agents/grader.md`, aggregate via `scripts/aggregate_benchmark`, present benchmark report
 - Iterate until satisfied
 - Optionally optimize description (agent-driven loop — see D3 below)
+- **Ask the user whether to optimize the description** — get explicit consent (agent-driven loop — see Description Optimization below)
+- **Package the skill** — always execute, no exceptions
 
 **Common failure modes (hard rules — violating any of these is a bug):**
 1. **Writing without talking to the user first** — Step 1 is not optional.
 2. **Skipping the eval consent question** — After drafting the skill you MUST ask "Would you like me to run evaluations?" and wait for an answer. This is the single most frequently skipped step.
 3. **Skipping grading/aggregation or doing it manually** — After runs complete, you MUST grade every run via `agents/grader.md` and aggregate via `scripts.aggregate_benchmark`. This is the most commonly skipped substep. If you find yourself presenting results without `grading.json` files and a `benchmark.md`, STOP — you skipped grading. Go back and do it.
-
+4. **Skipping the description optimization consent question** — Before finishing, you MUST explicitly ask "Would you like me to optimize the description?" and wait for an answer. Do not silently skip this.
+5. **Skipping packaging** — The packaging step is MANDATORY and must always run at the end. Do not treat it as conditional or optional. If you are about to end the conversation without having run `scripts.package_skill`, STOP — you skipped packaging.
 ---
 
 ## Step 1: Capture intent (do NOT skip)
@@ -146,37 +149,36 @@ Produces `benchmark.json` and `benchmark.md`. **Verify both files exist before p
 4. **Bundle repeated work** — if all runs wrote the same helper, put it in `scripts/`.
 5. Apply improvements, rerun into `iteration-<N+1>/`, repeat until the user is satisfied or feedback is empty.
 
+## Description Optimization (do NOT skip the ask)
+
+After the skill is finished (and after evals if they ran), you MUST stop and explicitly ask the user whether they want to optimize the description. Do not assume yes. Do not assume no. Do not silently move on to packaging. You must wait for an answer before proceeding.
+
+Ask exactly this (or equivalent):
+
+> "Would you like me to optimize the skill's description for better triggering accuracy?"
+
+- **Yes**: **Read `references/description-optimization.md` NOW before doing anything else.** That file contains the complete protocol — query generation, review, the agent-driven eval loop, trigger detection, and scoring. Do NOT proceed from memory or improvise. Read it, then follow it step by step.
+- **No**: proceed to Packaging.
+
+**If you find yourself moving to Packaging without having asked this question, STOP — you skipped this step. Go back and ask.**
+
 ---
 
-## Advanced: Blind comparison
+## Packaging (MANDATORY — always execute)
 
-For rigorous A/B comparison between two skill versions, read `agents/comparator.md` and `agents/analyzer.md`. Optional — the human review loop is usually enough.
-
----
-
-## Description Optimization
-
-After finishing the skill, offer to optimize the description. When the user accepts:
-
-**MANDATORY: Read `references/description-optimization.md` NOW before doing anything else.** That file contains the complete protocol — query generation, review, the agent-driven eval loop, trigger detection, and scoring. Do NOT proceed from memory or improvise. Read it, then follow it step by step.
-
----
-
-## Packaging
-
-If you have access to the `present_files` tool, package the skill and present it to the user:
+**THIS STEP IS NOT OPTIONAL.**  Package the skill. Run:
 
 ```bash
 python3 -m scripts.package_skill <path/to/skill-folder>
 ```
 
+If you have access to the `present_files` tool, also present the packaged output to the user.
 ---
 
 ## OpenClaw-Specific Notes
 
 OpenClaw loads skills from `~/.openclaw/workspace/skills/`. Newly installed skills are available in the next conversation turn.
 
-- **Skill injection for eval**: Temporary skills go in `~/.openclaw/workspace/skills/_eval-<name>-<hex>/` — you create and clean them up during the D3 loop.
 - **Description optimization**: You drive the loop directly by spawning subagents, checking session logs for trigger detection, and cancelling early. No external scripts needed.
 - **Updating an existing skill**: Preserve the original directory name and `name` frontmatter. Copy to `/tmp/skill-name/` before editing if the installed path is read-only.
 
